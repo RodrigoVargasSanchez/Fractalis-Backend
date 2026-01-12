@@ -8,29 +8,64 @@ export const OpenAIService = {
         .map((r: any, idx: number) => `[ID:${idx}] Ronda ${r.ronda} - ${r.participante}: ${r.contenido}`)
         .join("\n");
 
-      // 2. Definición de instrucciones (Prompt Engineering)
+      // 2. Definición de instrucciones con Few-Shot Rico y Granular
       const systemInstruction = `
-        Eres un analista experto en grafos. Analiza la transcripción del proyecto "${proyecto}".
-        
-        MODELO DE SALIDA JSON:
-        {
-          "conceptos": ["Idea 1", "Idea 2"],
-          "aristas": {
-            "sinergia": [[0, 1]],
-            "antagonismo": [[1, 2]]
-          },
-          "mapeo_opiniones": [
-            { "registro_idx": 0, "conceptos_indices": [0, 2] }
-          ]
-        }
+Tu tarea es realizar un análisis de grafos semánticos del proyecto "${proyecto}". 
+Debes extraer micro-conceptos granulares (1 a 3 por intervención) y mapear cómo chocan o se apoyan entre sí.
 
-        REGLAS:
-        1. "conceptos": Máximo 15 conceptos únicos.
-        2. "mapeo_opiniones": Para cada [ID:x] entregado en el user content, identifica qué índices del array "conceptos" se mencionan. Es vital para la trazabilidad.
-        3. No salgas del formato JSON.
-      `.trim();
+INSTRUCCIONES DE GRANULARIDAD:
+- No sintetices: Si tres personas hablan de "Economía", extrae la arista específica de cada uno (ej. "Inflación por consumo", "Déficit fiscal", "Inversión externa").
+- Relaciones Lógicas: 
+  * Sinergia: Cuando un concepto refuerza, deriva o soluciona a otro.
+  * Antagonismo: Cuando un concepto contradice, invalida o compite con otro.
 
-      // 3. Petición a OpenAI usando Fetch
+EJEMPLO DE REFERENCIA (FEW-SHOT):
+
+ENTRADA:
+[ID:0] "El trabajo remoto aumenta la productividad porque elimina el estrés del transporte."
+[ID:1] "El trabajo remoto destruye la cultura organizacional y el sentido de pertenencia."
+[ID:2] "Podemos mantener la cultura con reuniones presenciales mensuales, conservando la flexibilidad del hogar."
+
+SALIDA ESPERADA:
+{
+  "conceptos": [
+    "Eliminación de fricción logística por transporte",
+    "Bienestar psicológico derivado de la flexibilidad laboral",
+    "Erosión del capital social y cultura de equipo",
+    "Modelo híbrido como mediador de cohesión cultural"
+  ],
+  "aristas": {
+    "sinergia": [
+      [0, 1],
+      [2, 3]
+    ],
+    "antagonismo": [
+      [1, 2],
+      [2, 3]
+    ]
+  },
+  "mapeo_opiniones": [
+    { "registro_idx": 0, "conceptos_indices": [0, 1] },
+    { "registro_idx": 1, "conceptos_indices": [2] },
+    { "registro_idx": 2, "conceptos_indices": [3] }
+  ]
+}
+
+MODELO DE SALIDA JSON:
+{
+  "conceptos": [],
+  "aristas": { "sinergia": [], "antagonismo": [] },
+  "mapeo_opiniones": []
+}
+
+REGLAS DE ORO:
+1. Mínimo 1, máximo 3 conceptos por cada [ID].
+2. Los conceptos deben ser frases autoexplicativas (Sujeto + Acción/Estado + Contexto).
+3. Las aristas deben conectar los índices del array global "conceptos".
+4. Respuesta estrictamente en JSON.
+`.trim();
+
+      // 3. Petición a OpenAI
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -38,12 +73,12 @@ export const OpenAIService = {
           'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
         },
         body: JSON.stringify({
-          model: "gpt-4o", // O el modelo que prefieras (gpt-4o-mini es más económico)
+          model: "gpt-4o", 
           messages: [
             { role: "system", content: systemInstruction },
-            { role: "user", content: `Transcripción con IDs:\n\n${transcripcionTexto}` }
+            { role: "user", content: `Transcripción para analizar:\n\n${transcripcionTexto}` }
           ],
-          temperature: 0.1,
+          temperature: 0.15,
           response_format: { type: "json_object" }
         })
       });
@@ -54,10 +89,7 @@ export const OpenAIService = {
       }
 
       const result = await response.json();
-      const content = result.choices[0].message.content;
-
-      // 4. Retornar el contenido parseado
-      return JSON.parse(content);
+      return JSON.parse(result.choices[0].message.content);
 
     } catch (error: any) {
       console.error('❌ Error OpenAI Service:', error.message);
