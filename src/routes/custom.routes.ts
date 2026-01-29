@@ -47,13 +47,27 @@ router.post('/ai/chat', async (req, res) => {
     res.json({ success: true, espacioId: pid });
 
   } catch (error: any) {
-    // Si algo falla después de iniciar Postgres, hacemos rollback
-    if (client) await client.query('ROLLBACK');
-    console.error("❌ Error en el flujo de guardado:", error.message);
-    res.status(500).json({ error: error.message });
-  } finally {
-    client.release();
-  }
+    // 1. Si algo falla después de iniciar Postgres, hacemos rollback
+      if (client) await client.query('ROLLBACK');
+
+      console.error("❌ Error en el flujo de guardado:", error.message);
+
+      // 2. Determinar el código de estado coherente con el tipo de error
+      // Esto permite que el frontend reciba el mensaje específico de OpenAI
+      let statusCode = 500;
+
+      if (error.name === "OpenAIRateLimitError") statusCode = 429;
+      if (error.name === "OpenAIAuthError") statusCode = 401;
+      if (error.name === "OpenAIValidationError" || error.name === "ZodError") statusCode = 400;
+
+      // 3. Enviar respuesta en formato JSON que el frontend espera
+      res.status(statusCode).json({ 
+        error: error.message || "Ocurrió un error inesperado en el servidor." 
+      });
+
+    } finally {
+      client.release();
+    }
 });
 
 // --- DELETE: ELIMINACIÓN SINCRONIZADA PROFUNDA ---
@@ -79,5 +93,25 @@ router.delete('/espacios/:id', async (req, res) => {
     client.release();
   }
 });
+
+
+// --- GET: OBTENER GRAFO COMPLETO POR POSTGRES_ID ---
+router.get('/graph/:pid', async (req, res) => {
+  try {
+    const { pid } = req.params;
+    const graphData = await GraphModel.getFullGraphByTopic(parseInt(pid));
+    
+    // Cambiamos la validación: verificamos si el array de nodos está vacío
+    if (!graphData || graphData.nodes.length === 0) {
+      return res.status(404).json({ message: "Grafo no encontrado para este ID" });
+    }
+
+    res.json(graphData);
+  } catch (error: any) {
+    console.error("❌ Error al obtener el grafo:", error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 
 export default router;

@@ -1,6 +1,6 @@
+import dotenv from 'dotenv';
 import express from 'express';
 import cors from 'cors';
-import dotenv from 'dotenv';
 import { postgraphile } from 'postgraphile';
 import { postgraphileOptions } from './graphql/postgraphile.js';
 import customRoutes from './routes/custom.routes.js';
@@ -31,7 +31,15 @@ app.use(
   )
 );
 
-const PORT = 5000;
+
+const rawPort = process.env.PORT;
+
+if (!rawPort) {
+  throw new Error("❌ ERROR: La variable de entorno PORT no está definida en el archivo .env");
+}
+
+const PORT: number = parseInt(rawPort, 10);
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Backend listo en puerto ${PORT}`);
   console.log(`📡 GraphQL: http://localhost:${PORT}/graphql`);
