@@ -1,6 +1,11 @@
 import { neo4jConfig, getNeo4jHeaders } from '../config/neo4j.js';
 
 export const GraphModel = {
+  // Helper interno para normalizar UIDs y evitar colisiones entre espacios
+  _getConceptUid(pid: number | string, name: string): string {
+    return `${pid}_${name.trim().toLowerCase().replace(/\s+/g, '_')}`;
+  },
+
   async execute(statements: any[]) {
     console.log(`--- [NEO4J MODEL] 🛰️ Enviando ${statements.length} sentencias a Neo4j ---`);
     
@@ -25,9 +30,9 @@ export const GraphModel = {
     const { pid, proyecto, participantes, conceptos, registros, mapeo_opiniones, aristas } = data;
     const statements: any[] = [];
 
-    console.log(`--- [NEO4J MODEL] 🛠️ Construyendo grafo para Proyecto ID: ${pid} ---`);
+    console.log(`--- [NEO4J MODEL] 🛠️ Construyendo grafo aislado para Proyecto ID: ${pid} ---`);
 
-    // A. Topic
+    // A. Topic (Raíz del espacio)
     statements.push({
       statement: "MERGE (t:Topic {postgres_id: $pid}) SET t.title = $titulo",
       parameters: { pid, titulo: proyecto }
@@ -45,25 +50,26 @@ export const GraphModel = {
       });
     });
 
-    // C. Conceptos
+    // C. Conceptos con UID (Aislamiento por espacio)
+    const conceptosData = conceptos.map((c: string) => ({
+      nombre: c,
+      uid: this._getConceptUid(pid, c)
+    }));
+
     statements.push({
       statement: `
-        UNWIND $conceptos AS nombre
-        MERGE (c:Concept {name: nombre})
+        UNWIND $conceptosData AS cData
+        MERGE (c:Concept {uid: cData.uid})
+        SET c.name = cData.nombre, c.topic_id = $pid
         WITH c MATCH (t:Topic {postgres_id: $pid})
         MERGE (t)-[:HAS_CONCEPT]->(c)`,
-      parameters: { conceptos, pid }
+      parameters: { conceptosData, pid }
     });
 
-    // D. Opiniones
-    console.log(`--- [NEO4J MODEL] Mapeando ${registros.length} opiniones... ---`);
+    // D. Opiniones y Vínculos Semánticos
     registros.forEach((reg: any, idx: number) => {
       const oid = `OP_${pid}_${idx}`;
       
-      if (!reg.participante_db_id || reg.participante_db_id === "No encontrado") {
-        console.warn(`⚠️ [NEO4J MODEL] Registro ${idx}: participante_db_id no válido (${reg.participante_db_id})`);
-      }
-
       statements.push({
         statement: `
           MATCH (u:User {id: $uid}), (t:Topic {postgres_id: $pid})
@@ -72,62 +78,53 @@ export const GraphModel = {
               o.ronda = $ronda, 
               o.timestamp = datetime(
                 substring($ts, 6, 4) + "-" + substring($ts, 3, 2) + "-" + substring($ts, 0, 2) + 
-                "T" + 
-                trim(substring($ts, 10))
+                "T" + trim(substring($ts, 10))
               )
           MERGE (u)-[:MADE_OPINION]->(o)
           MERGE (o)-[:ABOUT_TOPIC]->(t)`,
         parameters: { 
           uid: reg.participante_db_id.toString(), 
-          pid, 
-          oid, 
-          text: reg.contenido, 
-          ronda: reg.ronda,
-          ts: reg.timestamp
+          pid, oid, text: reg.contenido, ronda: reg.ronda, ts: reg.timestamp
         }
       });
 
       const mapeo = mapeo_opiniones?.find((m: any) => m.registro_idx === idx);
       if (mapeo) {
         mapeo.conceptos_indices.forEach((cIdx: number) => {
-          if (conceptos[cIdx]) {
+          const cName = conceptos[cIdx];
+          if (cName) {
             statements.push({
-              statement: "MATCH (o:Opinion {id: $oid}) MATCH (c:Concept {name: $cn}) MERGE (o)-[:CONTAINS]->(c)",
-              parameters: { oid, cn: conceptos[cIdx] }
+              statement: "MATCH (o:Opinion {id: $oid}) MATCH (c:Concept {uid: $cuid}) MERGE (o)-[:CONTAINS]->(c)",
+              parameters: { oid, cuid: this._getConceptUid(pid, cName) }
             });
           }
         });
       }
     });
 
-    // E. Relaciones Semánticas (SECCIÓN CORREGIDA CON BLINDAJE)
-    aristas?.sinergia?.forEach((p: any) => {
-      const c1 = conceptos[p[0]];
-      const c2 = conceptos[p[1]];
-
-      if (c1 && c2) {
-        statements.push({
-          statement: "MATCH (c1:Concept {name: $n1}), (c2:Concept {name: $n2}) MERGE (c1)-[:COMPLEMENTARY_TO]->(c2)",
-          parameters: { n1: c1, n2: c2 }
-        });
-      } else {
-        console.warn(`⚠️ [NEO4J MODEL] Saltando sinergia: Índice fuera de rango [${p[0]}, ${p[1]}]`);
-      }
-    });
-
-    aristas?.antagonismo?.forEach((p: any) => {
-      const c1 = conceptos[p[0]];
-      const c2 = conceptos[p[1]];
-
-      if (c1 && c2) {
-        statements.push({
-          statement: "MATCH (c1:Concept {name: $n1}), (c2:Concept {name: $n2}) MERGE (c1)-[:CONTRADICTS]->(c2)",
-          parameters: { n1: c1, n2: c2 }
-        });
-      } else {
-        console.warn(`⚠️ [NEO4J MODEL] Saltando antagonismo: Índice fuera de rango [${p[0]}, ${p[1]}]`);
-      }
-    });
+    // E. Relaciones Semánticas Dinámicas (Aristas entre conceptos)
+    if (aristas && typeof aristas === 'object') {
+      Object.entries(aristas).forEach(([relType, pares]) => {
+        const label = relType.toUpperCase(); 
+        if (Array.isArray(pares)) {
+          pares.forEach((p) => {
+            const c1Name = conceptos[p[0]];
+            const c2Name = conceptos[p[1]];
+            if (c1Name && c2Name) {
+              statements.push({
+                statement: `
+                  MATCH (c1:Concept {uid: $uid1}), (c2:Concept {uid: $uid2}) 
+                  MERGE (c1)-[:${label}]->(c2)`,
+                parameters: { 
+                  uid1: this._getConceptUid(pid, c1Name), 
+                  uid2: this._getConceptUid(pid, c2Name) 
+                }
+              });
+            }
+          });
+        }
+      });
+    }
 
     return this.execute(statements);
   },
@@ -135,12 +132,14 @@ export const GraphModel = {
   async deleteFractalStructure(pid: number) {
     const statements = [
       {
+        // Borra Topic y Opiniones asociadas
         statement: `MATCH (t:Topic {postgres_id: $pid}) OPTIONAL MATCH (t)<-[:ABOUT_TOPIC]-(o:Opinion) DETACH DELETE t, o`,
         parameters: { pid }
       },
       {
-        statement: `MATCH (c:Concept) WHERE NOT (c)<-[:CONTAINS]-(:Opinion) DETACH DELETE c`,
-        parameters: {}
+        // Borra solo los conceptos de ESTE proyecto
+        statement: `MATCH (c:Concept {topic_id: $pid}) DETACH DELETE c`,
+        parameters: { pid }
       }
     ];
     return this.execute(statements);
@@ -148,7 +147,11 @@ export const GraphModel = {
 
   async getFullGraphByTopic(pid: number) {
     const statement = {
-      statement: `MATCH (t:Topic {postgres_id: $pid}) OPTIONAL MATCH path = (t)-[*..2]-(connected) RETURN path`,
+      // Traemos el grafo asegurando que los nodos pertenezcan al contexto del proyecto
+      statement: `
+        MATCH (t:Topic {postgres_id: $pid}) 
+        OPTIONAL MATCH path = (t)-[*..2]-(connected)
+        RETURN path`,
       parameters: { pid },
       resultDataContents: ["graph"] 
     };
@@ -164,14 +167,35 @@ export const GraphModel = {
     results.forEach((row: any) => {
       if (row.graph) {
         row.graph.nodes.forEach((node: any) => {
-          nodesMap.set(node.id, { id: node.id, labels: node.labels, properties: node.properties });
+          // Normalización para React Flow
+          nodesMap.set(node.id, { 
+            id: node.id, 
+            type: node.labels[0], // 'Concept', 'Opinion', 'Topic', 'User'
+            data: { 
+              label: node.properties.name || node.properties.title || node.properties.text,
+              ...node.properties 
+            },
+            // Posición inicial (el layout se maneja en el front)
+            position: { x: Math.random() * 100, y: Math.random() * 100 } 
+          });
         });
+        
         row.graph.relationships.forEach((rel: any) => {
-          edgesMap.set(rel.id, { id: rel.id, type: rel.type, source: rel.startNode, target: rel.endNode, properties: rel.properties });
+          edgesMap.set(rel.id, { 
+            id: rel.id, 
+            source: rel.startNode, 
+            target: rel.endNode, 
+            label: rel.type,
+            type: 'smoothstep', // Estilo de línea común en React Flow
+            animated: ['CAUSALIDAD', 'DEPENDENCIA'].includes(rel.type) 
+          });
         });
       }
     });
 
-    return { nodes: Array.from(nodesMap.values()), edges: Array.from(edgesMap.values()) };
+    return { 
+      nodes: Array.from(nodesMap.values()), 
+      edges: Array.from(edgesMap.values()) 
+    };
   }
 };

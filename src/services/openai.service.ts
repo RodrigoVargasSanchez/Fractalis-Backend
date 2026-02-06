@@ -6,14 +6,27 @@ class OpenAIValidationError extends Error { constructor(m: string) { super(m); t
 
 interface Participante { db_id: string; nombre: string; }
 interface Registro { ronda: number; participante: string; contenido: string; }
-interface ProyectoInput { proyecto: string; descripcion?: string; participantes_db?: Participante[]; registros: Registro[]; }
 
+interface RelacionConfig {
+  id: string;
+  nombre: string;
+  descripcion: string;
+  utilidad: string;
+}
+
+// 1. Interfaz actualizada para recibir las relaciones permitidas
+interface ProyectoInput { 
+  proyecto: string; 
+  descripcion?: string; 
+  participantes_db?: Participante[]; 
+  registros: Registro[];
+  relaciones_permitidas: RelacionConfig[]; // <--- Nuevo campo
+}
+
+// 2. Schema de Zod flexible: permite llaves dinámicas en 'aristas'
 const OpenAIResponseSchema = z.object({
   conceptos: z.array(z.string()),
-  aristas: z.object({
-    sinergia: z.array(z.tuple([z.number(), z.number()])),
-    antagonismo: z.array(z.tuple([z.number(), z.number()]))
-  }),
+  aristas: z.record(z.string(), z.array(z.tuple([z.number(), z.number()]))),
   mapeo_opiniones: z.array(z.object({
     registro_idx: z.number(),
     conceptos_indices: z.array(z.number())
@@ -23,46 +36,138 @@ const OpenAIResponseSchema = z.object({
 export const OpenAIService = {
   async generateText(data: ProyectoInput) {
     try {
-      const { proyecto, registros } = data;
+      // Desestructuramos las relaciones permitidas
+      const { proyecto, registros, relaciones_permitidas } = data;
+
+      const definicionesRelaciones = relaciones_permitidas.map(rel => {
+        return `CLAVE: "${rel.id}"
+        - Nombre: ${rel.nombre}
+        - Definición: ${rel.descripcion}
+        - Objetivo: ${rel.utilidad}`;
+      }).join('\n\n');
 
       const transcripcionTexto = registros
         .map((r, idx) => `[ID:${idx}] Ronda ${r.ronda} - ${r.participante}: ${r.contenido}`)
         .join("\n");
 
-      console.log("--- [OPENAI SERVICE] 📝 Preparando transcripción para IA ---");
-      console.log(`--- [OPENAI SERVICE] Cantidad de registros: ${registros.length} ---`);
+      //const listaRelacionesPrompt = relaciones_permitidas
+      //  .map(rel => `* ${rel.nombre}: Utiliza la clave "${rel.id}"`) // <--- Cambiado rel por rel.nombre y rel.id
+      //  .join("\n");
 
-      const systemInstruction = `
-Tu tarea es realizar un análisis de grafos semánticos del proyecto "${proyecto}". 
-Debes extraer micro-conceptos granulares (1 a 3 por intervención) y mapear cómo chocan o se apoyan entre sí.
-Distintas opiniones pueden apuntar al mismo concepto.
+      const systemInstruction = `### ROL
+Actúa como un Analista de Grafos Semánticos experto en extracción de conceptos y relaciones lógicas estructuradas para el proyecto "${proyecto}".
 
-INSTRUCCIONES DE GRANULARIDAD:
-- No sintetices: Si tres personas hablan de "Economía", extrae la arista específica de cada uno (ej. "Inflación por consumo", "Déficit fiscal", "Inversión externa").
-- Relaciones Lógicas: 
-  * Sinergia: Cuando un concepto refuerza, deriva o soluciona a otro.
-  * Antagonismo: Cuando un concepto contradice, invalida o compite con otro.
+### TAREA
+Extraer conceptos descriptivos de una transcripción y conectarlos mediante un grafo dirigido, utilizando ÚNICAMENTE las relaciones permitidas definidas dinámicamente.
 
-EJEMPLO DE REFERENCIA (FEW-SHOT):
-ENTRADA:
-[ID:0] "El trabajo remoto aumenta la productividad porque elimina el estrés del transporte."
-[ID:1] "El trabajo remoto destruye la cultura organizacional y el sentido de pertenencia."
-SALIDA ESPERADA:
+### REGLAS DE ORO DE ESTRUCTURA
+1. **Deduplicación:** Si un concepto ya existe en el array "conceptos", REUTILIZA su índice. No dupliques significados.
+2. **Atomicidad:** Máximo 3 conceptos por registro. Cada concepto debe ser una frase corta pero explicativa (ej: " Dependencia tecnológica en adolescentes ").
+3. **Validación de Aristas:** Las llaves del objeto "aristas" DEBEN ser exactamente iguales a los IDs proporcionados en la sección "ONTOLOGÍA".
+
+### ONTOLOGÍA DE RELACIONES PERMITIDAS (DINÁMICA)
+Debes clasificar las conexiones entre conceptos usando EXCLUSIVAMENTE estas claves:
+
+${definicionesRelaciones}
+
+### EJEMPLO DE REFERENCIA (Lógica de Mapeo)
+Si la entrada fuera:
+[ID:0] "La dependencia tecnológica en adolescentes se origina en la necesidad de validación social constante, reforzada por el diseño adictivo de las redes sociales."
+
+[ID:1] "El problema principal no es solo emocional, sino la falta de educación digital y de regulación en el hogar y en el sistema educativo."
+
+[ID:2] "La dependencia tecnológica aparece cuando se combinan vulnerabilidades emocionales con un entorno digital sin límites claros."
+
+[ID:3] "El uso excesivo de pantallas en adolescentes está asociado a problemas de concentración, alteraciones del sueño y aumento de ansiedad."
+
+[ID:4] "Estos efectos negativos se intensifican cuando no existe supervisión parental ni hábitos digitales saludables."
+
+[ID:5] "Un ejemplo claro es el uso nocturno del celular, que provoca mala calidad del sueño e irritabilidad durante el día."
+
+[ID:6] "A largo plazo, la dependencia tecnológica puede afectar el desarrollo de habilidades sociales presenciales y la tolerancia a la frustración."
+
+[ID:7] "Sin embargo, la tecnología no es intrínsecamente negativa, ya que bien utilizada puede potenciar el aprendizaje y la creatividad."
+
+[ID:8] "La solución no es prohibir la tecnología, sino generar una estrategia conjunta entre familia, escuela y plataformas digitales."
+
+La salida esperada (asumiendo que todo los IDs están permitidos) sería:
+
 {
-  "conceptos": ["Productividad", "Estrés del transporte", "Cultura organizacional"],
-  "aristas": { "sinergia": [], "antagonismo": [[0, 2]] },
-  "mapeo_opiniones": [{ "registro_idx": 0, "conceptos_indices": [0, 1] }]
+  "conceptos": [
+    "Dependencia tecnológica en adolescentes",
+    "Validación social constante",
+    "Diseño adictivo de redes sociales",
+    "Falta de educación digital",
+    "Falta de regulación familiar y escolar",
+    "Vulnerabilidades emocionales",
+    "Uso excesivo de pantallas",
+    "Problemas de concentración",
+    "Alteraciones del sueño",
+    "Ansiedad adolescente",
+    "Falta de supervisión parental",
+    "Uso nocturno del celular",
+    "Mala calidad del sueño",
+    "Déficit en habilidades sociales presenciales",
+    "Baja tolerancia a la frustración",
+    "Tecnología como herramienta educativa",
+    "Aprendizaje y creatividad",
+    "Estrategia conjunta familia-escuela-plataformas",
+    "Uso saludable de la tecnología"
+  ],
+  "aristas": {
+    "causalidad": [
+      [1, 0],
+      [2, 0],
+      [3, 0],
+      [6, 7],
+      [6, 8],
+      [6, 9]
+    ],
+    "dependencia": [
+      [10, 6]
+    ],
+    "ejemplificacion": [
+      [11, 12]
+    ],
+    "consecuencia": [
+      [0, 13],
+      [0, 14],
+      [6, 8]
+    ],
+    "sinergia": [
+      [5, 2],
+      [17, 18]
+    ],
+    "antagonismo": [
+      [15, 0]
+    ]
+  },
+  "mapeo_opiniones": [
+    { "registro_idx": 0, "conceptos_indices": [1, 2, 0] },
+    { "registro_idx": 1, "conceptos_indices": [3, 4, 0] },
+    { "registro_idx": 2, "conceptos_indices": [5, 2, 0] },
+    { "registro_idx": 3, "conceptos_indices": [6, 7, 8, 9] },
+    { "registro_idx": 4, "conceptos_indices": [10, 6] },
+    { "registro_idx": 5, "conceptos_indices": [11, 12] },
+    { "registro_idx": 6, "conceptos_indices": [0, 13, 14] },
+    { "registro_idx": 7, "conceptos_indices": [15, 16] },
+    { "registro_idx": 8, "conceptos_indices": [17, 18] }
+  ]
 }
+### PROTOCOLO DE CONSTRUCCIÓN DEL JSON
+- **conceptos**: Array de strings (strings únicos).
+- **aristas**: { "ID_DE_RELACION": [[origen_idx, destino_idx], ...] }.
+- **mapeo_opiniones**: [{ "registro_idx": number, "conceptos_indices": number[] }].
 
-REGLAS DE ORO:
-1. Mínimo 1, máximo 3 conceptos por cada [ID].
-2. Los conceptos deben ser frases autoexplicativas.
-3. Las aristas deben conectar los índices del array global "conceptos".
-4. Respuesta estrictamente en JSON.
-5. VERIFICACIÓN FINAL: Antes de cerrar el JSON, asegúrate de que el índice más alto utilizado no sea igual o mayor a la longitud total del array "conceptos".
+### VERIFICACIÓN FINAL (AUTO-CORRECCIÓN)
+Antes de generar el JSON, verifica:
+1. ¿Todas las llaves en "aristas" aparecen en la lista de CLAVES permitidas arriba?
+2. ¿Los índices en "aristas" son menores que conceptos.length?
+3. ¿He reutilizado índices para conceptos que son el mismo aunque se mencionen en registros diferentes?
 `.trim();
 
       console.log("--- [OPENAI SERVICE] 📡 Enviando petición a OpenAI API ---");
+      console.log(systemInstruction);
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -90,9 +195,6 @@ REGLAS DE ORO:
       const result = await response.json();
       const rawContent = result.choices[0].message.content;
 
-      console.log("--- [OPENAI SERVICE] 📥 Respuesta cruda recibida: ---");
-      console.log(rawContent);
-
       const parsed = JSON.parse(rawContent);
       console.log("--- [OPENAI SERVICE] 🔍 Validando con Zod... ---");
       
@@ -104,7 +206,7 @@ REGLAS DE ORO:
     } catch (error: any) {
       if (error instanceof z.ZodError) {
         console.error('❌ [OPENAI SERVICE] Error de formato JSON (Zod):', JSON.stringify(error.issues, null, 2));
-        throw new Error("La IA generó datos que no cumplen el esquema.");
+        throw new Error("La IA generó datos que no cumplen el esquema o usó claves no permitidas.");
       }
       console.error('❌ [OPENAI SERVICE] Error general:', error.message);
       throw error;
