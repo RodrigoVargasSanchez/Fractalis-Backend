@@ -32,6 +32,7 @@ services:
     environment:
       NEO4J_AUTH: ${NEO4J_USER}/${NEO4J_PASSWORD}
       NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_dbms_security_procedures_unrestricted: apoc.*
     ports:
       - "7474:7474" # Browser UI
       - "7687:7687" # Bolt Protocol

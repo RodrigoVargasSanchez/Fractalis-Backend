@@ -128,4 +128,60 @@ router.get('/graph/:pid', async (req, res) => {
   }
 });
 
+
+// --- PATCH: ACTUALIZACIÓN MASIVA DE CONCEPTOS ---
+router.patch('/concepts/bulk-update', async (req, res) => {
+  const { pid, updates } = req.body; 
+
+  try {
+    console.log(`--- [BULK-UPDATE] Procesando cambios para Proyecto ID: ${pid} ---`);
+    
+    if (!updates || !Array.isArray(updates)) {
+      return res.status(400).json({ error: "El formato de 'updates' es inválido." });
+    }
+
+    for (const change of updates) {
+      if (change.oldName !== change.newName) {
+        await GraphModel.updateConceptName(pid, change.oldName, change.newName);
+      }
+    }
+
+    res.json({ success: true, message: "Grafo reestructurado exitosamente." });
+  } catch (error: any) {
+    console.error("❌ [BULK-UPDATE] Error:", error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// En CUSTOM.ROUTES.TS
+
+router.patch('/edges/bulk-update', async (req, res) => {
+  const { updates, deletions } = req.body; 
+  // updates: Array<{ id: string, newType: string }>
+  // deletions: Array<string> (IDs de las aristas a borrar)
+
+  try {
+    console.log("--- [EDGE-UPDATE] Procesando actualización de relaciones ---");
+
+    // 1. Procesar Eliminaciones
+    if (deletions && Array.isArray(deletions)) {
+      for (const edgeId of deletions) {
+        await GraphModel.deleteRelationship(edgeId);
+      }
+    }
+
+    // 2. Procesar Actualizaciones de Tipo
+    if (updates && Array.isArray(updates)) {
+      for (const update of updates) {
+        await GraphModel.updateRelationshipType(update.id, update.newType);
+      }
+    }
+
+    res.json({ success: true, message: "Relaciones actualizadas correctamente." });
+  } catch (error: any) {
+    console.error("❌ [EDGE-UPDATE] Error:", error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 export default router;

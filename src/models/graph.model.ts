@@ -26,6 +26,91 @@ export const GraphModel = {
     return data;
   },
 
+
+  async updateConceptName(pid: number, oldName: string, newName: string) {
+    const oldUid = this._getConceptUid(pid, oldName);
+    const newUid = this._getConceptUid(pid, newName);
+
+    if (oldUid === newUid) return;
+
+    const statement = {
+      statement: `
+        // 1. Buscamos el nodo antiguo
+        MATCH (old:Concept {uid: $oldUid})
+        
+        // 2. MERGE para el nuevo nodo
+        MERGE (new:Concept {uid: $newUid})
+        SET new.name = $newName, 
+            new.topic_id = $pid,
+            new.id = old.id
+
+        // 3. Redirigir relaciones ENTRANTES usando subconsultas para evitar el producto cartesiano
+        WITH old, new
+        CALL {
+          WITH old, new
+          MATCH (a)-[r]->(old)
+          WHERE a <> new
+          WITH r, new
+          CALL apoc.refactor.to(r, new) YIELD input, output
+          RETURN count(output) AS relsIn
+        }
+
+        // 4. Redirigir relaciones SALIENTES
+        WITH old, new, relsIn
+        CALL {
+          WITH old, new
+          MATCH (old)-[r]->(b)
+          WHERE b <> new
+          WITH r, new
+          CALL apoc.refactor.from(r, new) YIELD input, output
+          RETURN count(output) AS relsOut
+        }
+
+        // 5. Eliminar el viejo una vez que las subconsultas terminaron
+        WITH old
+        DETACH DELETE old
+        RETURN count(*) as updated
+      `,
+      parameters: { oldUid, newUid, newName, pid }
+    };
+
+    return this.execute([statement]);
+  },
+
+
+  async updateRelationshipType(edgeId: string | number, newType: string) {
+    // Neo4j usa IDs internos para relaciones. El edgeId que viene del front 
+    // debe ser el ID numérico de Neo4j.
+    const statement = {
+      statement: `
+        MATCH ()-[r]->() 
+        WHERE id(r) = toInteger($edgeId)
+        CALL apoc.refactor.setType(r, $newType) YIELD input, output
+        RETURN output
+      `,
+      parameters: { 
+        edgeId: edgeId, 
+        newType: newType.toUpperCase() 
+      }
+    };
+
+    return this.execute([statement]);
+  },
+
+  async deleteRelationship(edgeId: string | number) {
+    const statement = {
+      statement: `
+        MATCH ()-[r]->() 
+        WHERE id(r) = toInteger($edgeId)
+        DELETE r
+        RETURN count(*) as deleted
+      `,
+      parameters: { edgeId: edgeId }
+    };
+
+    return this.execute([statement]);
+  },
+
   async saveFractalStructure(data: any) {
     const { pid, proyecto, participantes, conceptos, registros, mapeo_opiniones, aristas } = data;
     const statements: any[] = [];
