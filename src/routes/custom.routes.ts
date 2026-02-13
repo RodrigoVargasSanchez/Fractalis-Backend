@@ -8,7 +8,7 @@ const router = Router();
 // --- POST: GUARDADO SINCRONIZADO (Postgres + IA + Neo4j) ---
 router.post('/ai/chat', async (req, res) => {
   const client = await pool.connect();
-  console.log("--- [ROUTE] 🚀 Iniciando flujo /ai/chat ---");
+  console.log("--- [ROUTE] 🚀 Iniciando flujo /ai/chat (Análisis con Trazabilidad) ---");
   
   try {
     const { proyecto, descripcion, participantes_db, registros, relaciones } = req.body;
@@ -34,14 +34,14 @@ router.post('/ai/chat', async (req, res) => {
     await client.query('COMMIT');
     console.log("--- [ROUTE] ✅ Transacción Postgres completada (COMMIT) ---");
 
-    // 2. IA: Procesamiento con OpenAI
+    // 2. IA: Procesamiento con OpenAI (Ahora devuelve aristas con [src, tgt, source_reg])
     console.log("--- [ROUTE] 2. Llamando a OpenAI Service ---");
     const aiResponse = await OpenAIService.generateText(req.body);
     const { conceptos, aristas, mapeo_opiniones } = aiResponse;
     
-    console.log(`--- [ROUTE] ✅ IA respondió con ${conceptos.length} conceptos y ${mapeo_opiniones.length} mapeos ---`);
+    console.log(`--- [ROUTE] ✅ IA respondió con ${conceptos.length} conceptos y aristas trazables ---`);
 
-    // 3. NEO4J: Construcción del Grafo
+    // 3. NEO4J: Construcción del Grafo con Atribución de Autoría
     console.log("--- [ROUTE] 3. Enviando estructura a Neo4j ---");
     await GraphModel.saveFractalStructure({
       pid,
@@ -50,27 +50,22 @@ router.post('/ai/chat', async (req, res) => {
       conceptos: conceptos as string[],
       registros,
       mapeo_opiniones,
-      aristas,
+      aristas, // Aquí viajan las aristas con el índice de registro
       relaciones
     });
 
-    console.log(`✅ [ROUTE] Proyecto "${proyecto}" sincronizado totalmente (Postgres + Neo4j).`);
+    console.log(`✅ [ROUTE] Proyecto "${proyecto}" sincronizado totalmente con trazabilidad de autor.`);
     res.json({ success: true, espacioId: pid });
 
   } catch (error: any) {
-    // Si algo falla, intentamos hacer rollback en Postgres si la transacción estaba abierta
     try {
-      if (client) {
-        await client.query('ROLLBACK');
-        console.log("--- [ROUTE] 🔄 Rollback ejecutado en Postgres debido a error ---");
-      }
+      if (client) await client.query('ROLLBACK');
     } catch (rollbackError) {
       console.error("--- [ROUTE] ❌ Error al intentar Rollback:", rollbackError);
     }
 
     console.error("❌ [ROUTE] Error crítico detectado:", error.message);
 
-    // Determinar el código de estado coherente
     let statusCode = 500;
     if (error.name === "OpenAIRateLimitError") statusCode = 429;
     if (error.name === "OpenAIAuthError") statusCode = 401;
@@ -82,7 +77,6 @@ router.post('/ai/chat', async (req, res) => {
 
   } finally {
     client.release();
-    console.log("--- [ROUTE] 🔚 Conexión a DB liberada ---");
   }
 });
 
@@ -97,9 +91,7 @@ router.delete('/espacios/:id', async (req, res) => {
     await GraphModel.deleteFractalStructure(pid);
     await client.query('DELETE FROM espacios WHERE espacio_id = $1', [pid]);
     
-    console.log(`🗑️ [DELETE] Espacio ID: ${pid} eliminado de Postgres y Neo4j.`);
     res.json({ success: true });
-
   } catch (error: any) {
     console.error("❌ [DELETE] Error en eliminación:", error.message);
     res.status(500).json({ error: error.message });
@@ -117,7 +109,6 @@ router.get('/graph/:pid', async (req, res) => {
     const graphData = await GraphModel.getFullGraphByTopic(parseInt(pid));
     
     if (!graphData || graphData.nodes.length === 0) {
-      console.warn(`--- [GET GRAPH] ⚠️ No se encontraron nodos para PID: ${pid} ---`);
       return res.status(404).json({ message: "Grafo no encontrado para este ID" });
     }
 
@@ -128,58 +119,83 @@ router.get('/graph/:pid', async (req, res) => {
   }
 });
 
-
 // --- PATCH: ACTUALIZACIÓN MASIVA DE CONCEPTOS ---
 router.patch('/concepts/bulk-update', async (req, res) => {
   const { pid, updates } = req.body; 
-
   try {
-    console.log(`--- [BULK-UPDATE] Procesando cambios para Proyecto ID: ${pid} ---`);
-    
     if (!updates || !Array.isArray(updates)) {
       return res.status(400).json({ error: "El formato de 'updates' es inválido." });
     }
-
     for (const change of updates) {
       if (change.oldName !== change.newName) {
         await GraphModel.updateConceptName(pid, change.oldName, change.newName);
       }
     }
-
-    res.json({ success: true, message: "Grafo reestructurado exitosamente." });
+    res.json({ success: true });
   } catch (error: any) {
-    console.error("❌ [BULK-UPDATE] Error:", error.message);
     res.status(500).json({ error: error.message });
   }
 });
 
-// En CUSTOM.ROUTES.TS
+router.delete('/concepts/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const result = await GraphModel.deleteConcept(id);
+    res.json({ success: true, deletedCount: result });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
 router.patch('/edges/bulk-update', async (req, res) => {
   const { updates, deletions } = req.body; 
-  // updates: Array<{ id: string, newType: string }>
-  // deletions: Array<string> (IDs de las aristas a borrar)
-
   try {
-    console.log("--- [EDGE-UPDATE] Procesando actualización de relaciones ---");
-
-    // 1. Procesar Eliminaciones
     if (deletions && Array.isArray(deletions)) {
       for (const edgeId of deletions) {
         await GraphModel.deleteRelationship(edgeId);
       }
     }
-
-    // 2. Procesar Actualizaciones de Tipo
     if (updates && Array.isArray(updates)) {
       for (const update of updates) {
         await GraphModel.updateRelationshipType(update.id, update.newType);
       }
     }
-
-    res.json({ success: true, message: "Relaciones actualizadas correctamente." });
+    res.json({ success: true });
   } catch (error: any) {
-    console.error("❌ [EDGE-UPDATE] Error:", error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// --- POST: CREAR RELACIÓN MANUAL (Ahora con atribución) ---
+router.post('/edges', async (req, res) => {
+  const { sourceId, targetId, type, opinionId, pid } = req.body;
+  try {
+    console.log(`--- [CREATE-EDGE] Vinculando ${sourceId} -> [${type}] -> ${targetId} vía opinión ${opinionId} ---`);
+    
+    // Ahora opinionId es obligatorio para saber quién crea la relación manual
+    if (!sourceId || !targetId || !type || !opinionId || !pid) {
+      return res.status(400).json({ error: "Origen, destino, tipo, proyecto e ID de opinión son obligatorios." });
+    }
+
+    const result = await GraphModel.createRelationship(sourceId, targetId, type, opinionId, pid);
+    res.json({ success: true, edgeId: result });
+  } catch (error: any) {
+    console.error("❌ [CREATE-EDGE] Error:", error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// --- POST: CREAR CONCEPTO MANUAL ---
+router.post('/concepts', async (req, res) => {
+  const { pid, name, opinionId } = req.body; 
+  try {
+    if (!name || name.trim() === "" || !opinionId) {
+      return res.status(400).json({ error: "El nombre del concepto y el ID de la opinión son obligatorios." });
+    }
+    const result = await GraphModel.createSingleConcept(pid, name, opinionId);
+    res.json({ success: true, node: result });
+  } catch (error: any) {
+    console.error("❌ [CREATE-CONCEPT] Error:", error.message);
     res.status(500).json({ error: error.message });
   }
 });

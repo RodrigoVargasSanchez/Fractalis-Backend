@@ -22,9 +22,13 @@ interface ProyectoInput {
   relaciones_permitidas: RelacionConfig[];
 }
 
+/**
+ * ACTUALIZACIÓN: El esquema ahora espera una tupla de 3 números para las aristas:
+ * [origen_idx, destino_idx, registro_fuente_idx]
+ */
 const OpenAIResponseSchema = z.object({
   conceptos: z.array(z.string()),
-  aristas: z.record(z.string(), z.array(z.tuple([z.number(), z.number()]))),
+  aristas: z.record(z.string(), z.array(z.tuple([z.number(), z.number(), z.number()]))),
   mapeo_opiniones: z.array(z.object({
     registro_idx: z.number(),
     conceptos_indices: z.array(z.number())
@@ -73,19 +77,22 @@ No analices el texto registro por registro de forma aislada. Sigue este proceso:
    - Busca CUALQUIER indicio de desacuerdo, crítica, excepción o refutación para crear un "antagonismo".
 3. **Densidad:** Se espera un grafo rico en conexiones. Si un concepto no tiene al menos una relación con otro registro, vuelve a evaluar.
 
-### EJEMPLO DE REFERENCIA
-(Igual al anterior, pero priorizando la detección de conexiones entre IDs distantes)
+### EJEMPLO DE REFERENCIA PARA ARISTAS (ATRIBUCIÓN DE AUTORÍA)
+Si el Participante A [ID:0] introduce "Concepto X" y el Participante B [ID:4] dice algo que genera una "sinergia" con "Concepto X", la arista debe registrar que fue el registro [ID:4] quien propuso ese vínculo.
+Estructura: [índice_origen, índice_destino, índice_registro_que_crea_la_relación]
 
 ### PROTOCOLO DE CONSTRUCCIÓN DEL JSON
 - **conceptos**: Array de strings.
-- **aristas**: { "ID_DE_RELACION": [[origen_idx, destino_idx], ...] }.
+- **aristas**: { "ID_DE_RELACION": [[origen_idx, destino_idx, registro_fuente_idx], ...] }. 
+  *IMPORTANTE*: registro_fuente_idx es OBLIGATORIO y debe ser el ID numérico del registro donde el participante expresa dicha relación.
 - **mapeo_opiniones**: [{ "registro_idx": number, "conceptos_indices": number[] }].
 
 ### VERIFICACIÓN FINAL
 ¿He revisado cada concepto contra todos los demás para encontrar sinergias y antagonismos ocultos? 
+¿Cada arista tiene los 3 elementos requeridos (origen, destino y fuente de autoría)?
 Si la respuesta es no, procesa de nuevo antes de entregar el JSON.`.trim();
 
-      console.log("--- [OPENAI SERVICE] 📡 Enviando petición (Análisis Matricial) ---");
+      console.log("--- [OPENAI SERVICE] 📡 Enviando petición (Análisis Matricial con Trazabilidad) ---");
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -98,7 +105,7 @@ Si la respuesta es no, procesa de nuevo antes de entregar el JSON.`.trim();
             { role: "system", content: systemInstruction },
             { role: "user", content: `Transcripción para analizar detalladamente:\n\n${transcripcionTexto}` }
           ],
-          temperature: 0.4, // Aumentado a 0.4 para fomentar la detección de relaciones no obvias
+          temperature: 0.4, 
           response_format: { type: "json_object" }
         })
       });
@@ -110,9 +117,15 @@ Si la respuesta es no, procesa de nuevo antes de entregar el JSON.`.trim();
       const result = await response.json();
       const rawContent = result.choices[0].message.content;
       const parsed = JSON.parse(rawContent);
+      
+      // La validación de Zod fallará si OpenAI no devuelve los 3 elementos en la arista
       return OpenAIResponseSchema.parse(parsed);
 
     } catch (error: any) {
+      if (error instanceof z.ZodError) {
+        console.error('❌ Error de Validación en Schema OpenAI:', error.issues);
+        throw new OpenAIValidationError("La IA no devolvió el formato de aristas con trazabilidad esperado.");
+      }
       console.error('❌ Error en OpenAIService:', error.message);
       throw error;
     }
