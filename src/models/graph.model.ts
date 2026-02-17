@@ -232,6 +232,110 @@ async createRelationship(sourceId: string, targetId: string, type: string, opini
     return this.execute(statements);
   },
 
+async getAdvancedStats(pid: number) {
+  const statement = {
+    statement: `
+      WITH 'conceptGraph_' + $pid AS graphName
+
+      CALL {
+        WITH graphName
+        CALL gds.graph.exists(graphName) YIELD exists
+        WITH graphName, exists
+        CALL apoc.do.when(
+          exists,
+          'CALL gds.graph.drop($graphName) YIELD graphName RETURN graphName',
+          'RETURN null AS graphName',
+          {graphName: graphName}
+        ) YIELD value
+        RETURN value
+      }
+
+      CALL gds.graph.project.cypher(
+        graphName,
+        '
+          MATCH (c:Concept)
+          WHERE c.topic_id = $pid
+          RETURN id(c) AS id
+        ',
+        '
+          MATCH (c1:Concept)-[r]->(c2:Concept)
+          WHERE c1.topic_id = $pid AND c2.topic_id = $pid
+          RETURN id(c1) AS source, id(c2) AS target
+        ',
+        { parameters: { pid: $pid } }
+      )
+      YIELD graphName AS gName
+
+      // ---- Louvain una sola vez ----
+      CALL gds.louvain.stream(gName)
+      YIELD nodeId, communityId
+      WITH gName,
+           collect({
+             id: nodeId,
+             comunidad: communityId
+           }) AS louvainResults
+
+      // ---- Closeness una sola vez ----
+      CALL gds.closeness.stream(gName)
+      YIELD nodeId, score
+      WITH gName, louvainResults,
+           collect({
+             id: nodeId,
+             centralidad: score
+           }) AS closenessResults
+
+      UNWIND louvainResults AS l
+      UNWIND closenessResults AS c
+      WITH gName, l, c
+      WHERE l.id = c.id
+
+      WITH gName,
+           gds.util.asNode(l.id) AS node,
+           l.comunidad AS comunidad,
+           c.centralidad AS centralidad
+
+      OPTIONAL MATCH (u:User)-[:MADE_OPINION]->(:Opinion)-[:CONTAINS]->(node)
+      WITH gName, node, comunidad, centralidad,
+           count(DISTINCT u) AS grado
+
+      WITH gName,
+           collect({
+             conceptId: id(node),
+             name: node.name,
+             grado: grado,
+             comunidad: comunidad,
+             centralidad: centralidad
+           }) AS results
+
+      CALL gds.graph.drop(gName) YIELD graphName
+
+      UNWIND results AS row
+      RETURN
+        row.conceptId AS conceptId,
+        row.name AS name,
+        row.grado AS grado,
+        row.comunidad AS comunidad,
+        row.centralidad AS centralidad
+    `,
+    parameters: { pid }
+  };
+
+  const response = await this.execute([statement]);
+
+  return response.results[0].data.map((row: any) => ({
+    id: row.row[0].toString(),
+    name: row.row[1],
+    grado: row.row[2] || 0,
+    comunidad: row.row[3],
+    centralidad: row.row[4] || 0
+  }));
+}
+
+
+
+
+,
+
   // En getFullGraphByTopic dentro de tu GraphModel
   async getFullGraphByTopic(pid: number) {
     const statement = {

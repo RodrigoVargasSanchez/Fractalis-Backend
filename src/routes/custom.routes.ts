@@ -5,6 +5,21 @@ import pool from '../config/database.js';
 
 const router = Router();
 
+// --- GET: OBTENER ESTADÍSTICAS AVANZADAS DEL GRAFO ---
+router.get('/graph/:pid/stats', async (req, res) => {
+  try {
+    const { pid } = req.params;
+    console.log(`--- [STATS] Calculando métricas avanzadas para PID: ${pid} ---`);
+    
+    const stats = await GraphModel.getAdvancedStats(parseInt(pid));
+    
+    res.json(stats);
+  } catch (error: any) {
+    console.error("❌ [STATS] Error al calcular estadísticas:", error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // --- POST: GUARDADO SINCRONIZADO (Postgres + IA + Neo4j) ---
 router.post('/ai/chat', async (req, res) => {
   const client = await pool.connect();
