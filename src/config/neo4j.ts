@@ -1,9 +1,11 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
-// Usamos la configuración para peticiones HTTP (fetch) como tenías originalmente
+const NEO4J_HOST = process.env.NEO4J_HOST || 'neo4j';
+const NEO4J_HTTP_PORT = process.env.NEO4J_HTTP_PORT || '7474';
+
 export const neo4jConfig = {
-  url: 'http://neo4j:7474/db/neo4j/tx/commit',
+  url: `http://${NEO4J_HOST}:${NEO4J_HTTP_PORT}/db/neo4j/tx/commit`,
   auth: Buffer.from(`${process.env.NEO4J_USER}:${process.env.NEO4J_PASSWORD}`).toString('base64')
 };
 
