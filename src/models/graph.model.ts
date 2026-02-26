@@ -161,12 +161,31 @@ async createRelationship(sourceId: string, targetId: string, type: string, opini
       });
     });
 
-    // C. Conceptos
-    const conceptosData = conceptos.map((c: string) => ({ nombre: c, uid: this._getConceptUid(pid, c) }));
-    statements.push({
-      statement: `UNWIND $conceptosData AS cData MERGE (c:Concept {uid: cData.uid}) SET c.name = cData.nombre, c.topic_id = $pid WITH c MATCH (t:Topic {postgres_id: $pid}) MERGE (t)-[:HAS_CONCEPT]->(c)`,
-      parameters: { conceptosData, pid }
-    });
+    // C. Conceptos (Validación para evitar huérfanos)
+    // 1. Identificamos qué índices de conceptos sí tienen una opinión asociada
+    const indicesConOpinion = new Set(mapeo_opiniones?.flatMap((m: any) => m.conceptos_indices) || []);
+
+    // 2. Filtramos y tipamos: 'c' es un objeto con nombre e idx
+    const conceptosValidos = conceptos
+      .map((nombre: string, idx: number) => ({ nombre, idx }))
+      .filter((c: { nombre: string; idx: number }) => indicesConOpinion.has(c.idx));
+
+    // 3. Generamos la data para Neo4j
+    const conceptosData = conceptosValidos.map((c: { nombre: string; idx: number }) => ({ 
+      nombre: c.nombre, 
+      uid: this._getConceptUid(pid, c.nombre) 
+    }));
+
+    if (conceptosData.length > 0) {
+      statements.push({
+        statement: `UNWIND $conceptosData AS cData 
+                    MERGE (c:Concept {uid: cData.uid}) 
+                    SET c.name = cData.nombre, c.topic_id = $pid 
+                    WITH c MATCH (t:Topic {postgres_id: $pid}) 
+                    MERGE (t)-[:HAS_CONCEPT]->(c)`,
+        parameters: { conceptosData, pid }
+      });
+    }
 
     // D. Opiniones
     registros.forEach((reg: any, idx: number) => {
@@ -203,6 +222,12 @@ async createRelationship(sourceId: string, targetId: string, type: string, opini
         if (Array.isArray(pares)) {
           pares.forEach((p) => {
             const [srcIdx, tgtIdx, regIdx] = p; // Ahora OpenAI envía 3 valores
+
+            if (srcIdx === tgtIdx) {
+                console.warn(`⚠️ Saltando relación autorreferencial en concepto índice: ${srcIdx}`);
+                return; // No procesar esta arista
+              }
+
             const c1Name = conceptos[srcIdx];
             const c2Name = conceptos[tgtIdx];
             const oid = `OP_${pid}_${regIdx}`;
@@ -211,6 +236,7 @@ async createRelationship(sourceId: string, targetId: string, type: string, opini
               statements.push({
                 statement: `
                   MATCH (c1:Concept {uid: $uid1}), (c2:Concept {uid: $uid2})
+                  WHERE c1 <> c2
                   MATCH (o:Opinion {id: $oid})<-[:MADE_OPINION]-(u:User)
                   MERGE (c1)-[r:${label} {author_id: u.id}]->(c2)
                   SET r.author_name = u.name, r.opinion_id = o.id, r.project_id = $pid`,

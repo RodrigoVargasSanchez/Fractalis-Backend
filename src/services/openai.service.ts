@@ -65,6 +65,8 @@ Extraer conceptos descriptivos y, lo más importante, construir un grafo altamen
 1. **Deduplicación Estricta:** Reutiliza índices para significados similares.
 2. **Atomicidad:** Máximo 3 conceptos por registro.
 3. **Validación:** Solo usa las claves de la ONTOLOGÍA.
+4. **No Huérfanos:** TODO concepto listado en "conceptos" DEBE estar presente al menos en un "registro_idx" dentro de "mapeo_opiniones".
+5. **No Auto-relaciones:** En "aristas", el origen_idx y destino_idx DEBEN ser diferentes. Un concepto no puede relacionarse consigo mismo.
 
 ### ONTOLOGÍA DE RELACIONES PERMITIDAS
 ${definicionesRelaciones}
@@ -86,6 +88,49 @@ Estructura: [índice_origen, índice_destino, índice_registro_que_crea_la_relac
 - **aristas**: { "ID_DE_RELACION": [[origen_idx, destino_idx, registro_fuente_idx], ...] }. 
   *IMPORTANTE*: registro_fuente_idx es OBLIGATORIO y debe ser el ID numérico del registro donde el participante expresa dicha relación.
 - **mapeo_opiniones**: [{ "registro_idx": number, "conceptos_indices": number[] }].
+
+### EJEMPLO DE REFERENCIA (FEW-SHOT PROMPTING)
+
+**Input del Usuario:**
+[ID:0] CS: "Desde una perspectiva organizacional, el teletrabajo puede aumentar la productividad al permitir mayor flexibilidad horaria."
+[ID:1] DP: "Si bien reduce traslados, también puede difuminar los límites entre vida personal y laboral, generando agotamiento."
+[ID:2] CS2: "Además, no todas las tareas se benefician; algunas requieren colaboración presencial para mayor eficiencia."
+[ID:3] CS: "En relación con la colaboración, las herramientas digitales han avanzado significativamente, permitiendo coordinación en tiempo real."
+[ID:4] DP: "Sin embargo, la comunicación virtual puede provocar malentendidos y afectar la cohesión de los equipos de trabajo."
+[ID:5] CS2: "También debemos considerar la desigualdad tecnológica, ya que no todos cuentan con las mismas condiciones en sus hogares."
+[ID:6] CS: "Si las empresas establecen políticas claras y cultura de resultados, el teletrabajo puede ser un modelo sostenible."
+[ID:7] DP: "Coincido parcialmente, pero es necesario implementar medidas de apoyo psicológico para evitar el burnout."
+[ID:8] CS2: "En síntesis, el debate es cómo regularlo para equilibrar productividad y bienestar."
+
+**Output Esperado (JSON):**
+{
+  "conceptos": [
+    "Teletrabajo", "Productividad", "Flexibilidad horaria", "Difuminación vida laboral-personal", 
+    "Agotamiento/Burnout", "Necesidad de colaboración presencial", "Herramientas digitales avanzadas", 
+    "Coordinación en tiempo real", "Malentendidos en comunicación virtual", "Cohesión de equipo", 
+    "Desigualdad tecnológica", "Políticas claras empresariales", "Cultura organizacional orientada a resultados", 
+    "Modelo laboral sostenible", "Medidas de apoyo psicológico", "Regulación del teletrabajo", "Equilibrio productividad-bienestar"
+  ],
+  "aristas": {
+    "causalidad": [[0, 1, 0], [3, 4, 1], [6, 7, 3], [8, 9, 4], [12, 13, 6], [15, 16, 8]],
+    "dependencia": [[13, 11, 6], [13, 12, 6], [16, 15, 7], [1, 2, 0]],
+    "consecuencia": [[10, 9, 5], [5, 1, 2], [4, 16, 7], [0, 3, 1]],
+    "sinergia": [[0, 2, 0], [6, 1, 3], [15, 13, 8], [11, 12, 6], [1, 16, 8]],
+    "antagonismo": [[1, 4, 1], [6, 5, 2], [7, 8, 4], [2, 3, 1], [1, 3, 1]],
+    "ejemplificacion": [[6, 7, 3], [15, 16, 8]]
+  },
+  "mapeo_opiniones": [
+    { "registro_idx": 0, "conceptos_indices": [0, 1, 2] },
+    { "registro_idx": 1, "conceptos_indices": [3, 4, 0] },
+    { "registro_idx": 2, "conceptos_indices": [5, 0, 1] },
+    { "registro_idx": 3, "conceptos_indices": [6, 7, 1] },
+    { "registro_idx": 4, "conceptos_indices": [8, 9, 0] },
+    { "registro_idx": 5, "conceptos_indices": [10, 0, 9] },
+    { "registro_idx": 6, "conceptos_indices": [11, 12, 13] },
+    { "registro_idx": 7, "conceptos_indices": [14, 4, 15] },
+    { "registro_idx": 8, "conceptos_indices": [15, 16, 0] }
+  ]
+}
 
 ### VERIFICACIÓN FINAL
 ¿He revisado cada concepto contra todos los demás para encontrar sinergias y antagonismos ocultos? 
