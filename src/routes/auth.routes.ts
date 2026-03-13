@@ -1,35 +1,39 @@
+// src/routes/auth.routes.ts
 import { Router } from 'express';
 import jwt from 'jsonwebtoken';
-import pool from '../config/database.js';
+import bcrypt from 'bcryptjs';
+import pool from '../config/database.js'; // Tu conexión a PostgreSQL
 
 const router = Router();
+const JWT_SECRET = process.env.JWT_SECRET || 'tu_clave_secreta_super_segura';
 
+// src/routes/auth.routes.ts
 router.post('/login', async (req, res) => {
-  const { usuarioNombre, clave } = req.body; // 'clave' sería el ID en este ejemplo de prueba
+  const { usuarioNombre, clave } = req.body;
 
   try {
-    // Buscar usuario en PostgreSQL
+    // Buscamos por usuario_nombre según tu esquema de DB
     const result = await pool.query(
-      'SELECT usuario_id, usuario_nombre FROM usuarios WHERE usuario_nombre = $1 AND usuario_id = $2',
-      [usuarioNombre, clave]
+      'SELECT usuario_id, usuario_nombre, password_hash FROM usuarios WHERE usuario_nombre = $1', 
+      [usuarioNombre]
     );
+    
+    const user = result.rows[0];
 
-    if (result.rows.length === 0) {
-      return res.status(401).json({ error: 'Credenciales inválidas' });
+    if (!user || !(await bcrypt.compare(clave, user.password_hash))) {
+      return res.status(401).json({ message: 'Credenciales inválidas' });
     }
 
-    const usuario = result.rows[0];
-
-    // Generar JWT
+    // Generamos el token incluyendo el usuario_id para que PostGraphile lo use
     const token = jwt.sign(
-      { usuarioId: usuario.usuario_id, nombre: usuario.usuario_nombre },
+      { usuarioId: user.usuario_id, nombre: user.usuario_nombre },
       process.env.JWT_SECRET!,
-      { expiresIn: '8h' }
+      { expiresIn: '7d' }
     );
 
-    res.json({ token, usuario: { id: usuario.usuario_id, nombre: usuario.usuario_nombre } });
+    res.json({ token });
   } catch (error) {
-    res.status(500).json({ error: 'Error en el servidor' });
+    res.status(500).json({ message: 'Error en el servidor' });
   }
 });
 
