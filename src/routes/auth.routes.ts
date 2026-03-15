@@ -9,13 +9,15 @@ const JWT_SECRET = process.env.JWT_SECRET || 'tu_clave_secreta_super_segura';
 
 // src/routes/auth.routes.ts
 router.post('/login', async (req, res) => {
+  console.log("Datos recibidos:", req.body); // <-- Agrega esto
   const { usuarioNombre, clave } = req.body;
 
   try {
     // Buscamos por usuario_nombre según tu esquema de DB
+// Cambia tu consulta actual por esta:
     const result = await pool.query(
-      'SELECT usuario_id, usuario_nombre, password_hash FROM usuarios WHERE usuario_nombre = $1', 
-      [usuarioNombre]
+      'SELECT usuario_id, usuario_nombre, password_hash FROM usuarios WHERE TRIM(usuario_nombre) ILIKE $1', 
+      [usuarioNombre.trim()]
     );
     
     const user = result.rows[0];
