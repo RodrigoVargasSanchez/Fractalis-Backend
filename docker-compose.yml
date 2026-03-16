@@ -57,10 +57,12 @@ services:
       - fractalis-neo4j-data:/data
       - ./database/neo4j:/var/lib/neo4j/import
     healthcheck:
-      test: ["CMD-SHELL", "cypher-shell -u ${NEO4J_USER} -p ${NEO4J_PASSWORD} 'RETURN 1'"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      # Usamos wget para ver si el puerto 7474 responde, es más ligero que cypher-shell
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:7474 || exit 1"]
+      interval: 15s      # Más tiempo entre pruebas
+      timeout: 10s
+      retries: 10        # Más intentos para dar tiempo a los plugins
+      start_period: 30s
     entrypoint: >
       /bin/bash -c "
       (sleep 20 && cypher-shell -u ${NEO4J_USER} -p ${NEO4J_PASSWORD} -f /var/lib/neo4j/import/init.cypher && echo '✅ Neo4j inicializado') &
