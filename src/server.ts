@@ -34,7 +34,7 @@ app.use(
 
 // 3. Middlewares que consumen el cuerpo de la petición
 // Se colocan después de PostGraphile para no interferir con GraphQL
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
 
 // 4. Rutas de Autenticación (PÚBLICAS)
 app.use('/api/auth', authRoutes);

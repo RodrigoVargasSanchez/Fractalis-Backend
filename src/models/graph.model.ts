@@ -26,6 +26,14 @@ export const GraphModel = {
     return data;
   },
 
+  async updateTopicTitle(pid: number, title: string) {
+    const statement = {
+      statement: "MATCH (t:Topic {postgres_id: $pid}) SET t.title = $title RETURN count(t) as count",
+      parameters: { pid, title }
+    };
+    return this.execute([statement]);
+  },
+
 // graph.model.ts
 
 async createRelationship(sourceId: string, targetId: string, type: string, opinionId: string, pid: number) {

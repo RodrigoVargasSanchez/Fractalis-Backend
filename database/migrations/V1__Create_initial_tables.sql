@@ -1,7 +1,10 @@
 -- 1. Usuarios
 CREATE TABLE usuarios (
     usuario_id VARCHAR(50) PRIMARY KEY,
-    usuario_nombre VARCHAR(100) NOT NULL
+    usuario_nombre VARCHAR(100) NOT NULL,
+    password_hash VARCHAR(255),
+    usuario_email VARCHAR(100) UNIQUE,
+    rol VARCHAR(50) DEFAULT 'usuario'
 );
 
 -- 2. Espacios
