@@ -92,7 +92,7 @@ Debes devolver ÚNICAMENTE un objeto JSON con la siguiente estructura (usa respo
           'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
         },
         body: (() => {
-          const modelName = process.env.OPENAI_MODEL || "gpt-5.4-mini";
+          const modelName = process.env.OPENAI_MODEL || "gpt-4o-mini";
           const isReasoning = modelName.startsWith("o1") || modelName.startsWith("o3");
           const payload: any = {
             model: modelName,
@@ -464,7 +464,7 @@ Debes evaluar y mapear rigurosamente el texto e interacciones utilizando las sig
 
     try {
       console.log("--- [OPENAI SERVICE] 📡 Enviando petición (Narrativa e Informe) ---");
-      const modelName = process.env.OPENAI_MODEL || "gpt-5.4-mini";
+      const modelName = process.env.OPENAI_MODEL || "gpt-4o-mini";
       const isReasoning = modelName.startsWith("o1") || modelName.startsWith("o3");
       const payload: any = {
         model: modelName,
